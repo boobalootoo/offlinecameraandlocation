@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Offline Camera App</title>
+    <link rel="manifest" href="manifest.json">
+    <link href="tailwind.min.css" rel="stylesheet">
+    <style>
+        /* Custom styles for the Inter font and basic centering */
+        body {
+            font-family: 'Inter', sans-serif;
+            display: flex;
+            flex-direction: column; /* Arrange items vertically */
+            justify-content: flex-start; /* Start content from the top */
+            align-items: center;
+            min-height: 100vh;
+            background-color: #f0f4f8; /* Light background */
+            margin: 0;
+            padding: 1rem; /* Add some padding for mobile */
+            box-sizing: border-box; /* Include padding in element's total width and height */
+        }
+        /* Ensure video element is responsive */
+        video {
+            max-width: 100%;
+            height: auto;
+            border-radius: 0.5rem; /* Rounded corners */
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); /* Subtle shadow */
+            background-color: #000; /* Black background for video area */
+        }
+        /* Style for gallery images */
+        .gallery img {
+            max-width: 120px; /* Smaller thumbnails */
+            height: auto;
+            margin: 0.5rem;
+            border-radius: 0.5rem;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            border: 2px solid #e2e8f0; /* Light border */
+        }
+    </style>
+</head>
+<body class="text-gray-800">
+    <div class="bg-white p-6 md:p-8 rounded-lg shadow-xl text-center max-w-2xl w-full border border-gray-200 mb-6">
+        <h1 class="text-2xl md:text-3xl font-bold mb-4 text-indigo-700">Offline Camera App</h1>
+
+        <video id="video" autoplay playsinline class="w-full mb-4"></video>
+
+        <button id="captureButton" class="w-full px-6 py-3 bg-indigo-600 text-white font-semibold rounded-lg shadow-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-opacity-75 transition duration-300 ease-in-out disabled:opacity-50 disabled:cursor-not-allowed mb-4">
+            📷 Take Photo
+        </button>
+
+        <p id="status" class="mt-2 text-gray-600 text-sm md:text-base"></p>
+    </div>
+
+    <div class="bg-white p-6 md:p-8 rounded-lg shadow-xl max-w-2xl w-full border border-gray-200 mb-6">
+        <h2 class="text-xl md:text-2xl font-bold mb-4 text-indigo-700">Captured Photos</h2>
+        <div id="gallery" class="flex flex-wrap justify-center items-center p-2 border border-dashed border-gray-300 rounded-lg min-h-[100px]">
+            <p id="noPhotosMessage" class="text-gray-500">No photos captured yet.</p>
+        </div>
+
+        <div class="mt-6 flex flex-col sm:flex-row justify-center gap-4">
+            <button id="uploadAllButton" class="px-6 py-3 bg-green-600 text-white font-semibold rounded-lg shadow-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-opacity-75 transition duration-300 ease-in-out disabled:opacity-50 disabled:cursor-not-allowed">
+                ⬆️ Upload All Saved
+            </button>
+            <button id="clearSavedButton" class="px-6 py-3 bg-red-600 text-white font-semibold rounded-lg shadow-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-opacity-75 transition duration-300 ease-in-out disabled:opacity-50 disabled:cursor-not-allowed">
+                🗑️ Clear All Saved
+            </button>
+        </div>
+    </div>
+
+    <script>
+        // Replace with your actual Google Apps Script Web App URL
+        const GOOGLE_APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzW8aRLFh9E1WHUuugvvIqOyYBWrMNRmivot0grSBDRb-WX2Se2hCvzIkIdgMaLZG4-8Q/exec"; // Use your actual URL
+
+        const video = document.getElementById('video');
+        const captureButton = document.getElementById('captureButton');
+        const gallery = document.getElementById('gallery');
+        const uploadAllButton = document.getElementById('uploadAllButton');
+        const clearSavedButton = document.getElementById('clearSavedButton');
+        const statusDisplay = document.getElementById('status');
+        const noPhotosMessage = document.getElementById('noPhotosMessage');
+
+        // Define the path for your GitHub Pages repository
+        // This MUST match your repository name (e.g., /locationfetcher/)
+        const REPO_PATH = '/locationfetcher/';
+
+        // --- Service Worker Registration ---
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register(REPO_PATH + 'service-worker.js', { scope: REPO_PATH })
+                    .then(registration => {
+                        console.log('Service Worker registered with scope:', registration.scope);
+                    })
+                    .catch(error => {
+                        console.error('Service Worker registration failed:', error);
+                        statusDisplay.innerText = 'Offline mode may not work: Service Worker failed to register.';
+                        statusDisplay.classList.add('text-red-600');
+                    });
+            });
+        }
+
+        // --- Camera Initialization ---
+        async function initCamera() {
+            try {
+                statusDisplay.innerText = "Requesting camera access...";
+                statusDisplay.classList.remove('text-red-600', 'text-green-600', 'text-orange-500');
+                statusDisplay.classList.add('text-gray-600');
+
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        facingMode: 'environment' // Use rear camera on mobile
+                    },
+                    audio: false
+                });
+                video.srcObject = stream;
+                statusDisplay.innerText = "Camera ready. Take a photo!";
+                captureButton.disabled = false; // Enable capture button once camera is ready
+            } catch (err) {
+                console.error('Camera access failed:', err);
+                statusDisplay.innerText = 'Camera access failed: ' + err.message + '. Please allow camera permissions.';
+                statusDisplay.classList.add('text-red-600');
+                captureButton.disabled = true; // Keep capture button disabled on failure
+            }
+        }
+
+        // --- Local Storage Management ---
+        function getCapturedImages() {
+            try {
+                return JSON.parse(localStorage.getItem('capturedImages') || '[]');
+            } catch (e) {
+                console.error("Error parsing captured images from localStorage:", e);
+                return [];
+            }
+        }
+
+        function saveCapturedImages(images) {
+            localStorage.setItem('capturedImages', JSON.stringify(images));
+        }
+
+        // --- Gallery Display ---
+        function loadGallery() {
+            gallery.innerHTML = ''; // Clear existing images
+            const images = getCapturedImages();
+
+            if (images.length === 0) {
+                noPhotosMessage.classList.remove('hidden');
+                uploadAllButton.disabled = true;
+                clearSavedButton.disabled = true;
+            } else {
+                noPhotosMessage.classList.add('hidden');
+                images.forEach((imgObj, index) => {
+                    const imgContainer = document.createElement('div');
+                    imgContainer.className = 'relative group'; // For potential future delete button overlay
+
+                    const img = document.createElement('img');
+                    img.src = imgObj.imageData;
+                    img.alt = `Captured Photo ${index + 1}`;
+                    img.title = imgObj.latitude && imgObj.longitude ? `Lat: ${imgObj.latitude}, Lon: ${imgObj.longitude}` : 'No location data';
+                    imgContainer.appendChild(img);
+                    gallery.appendChild(imgContainer);
+                });
+                uploadAllButton.disabled = false;
+                clearSavedButton.disabled = false;
+            }
+        }
+
+        // --- Capture Photo ---
+        captureButton.onclick = async () => {
+            captureButton.disabled = true;
+            statusDisplay.innerText = "Capturing photo and getting location...";
+            statusDisplay.classList.remove('text-red-600', 'text-green-600', 'text-orange-500');
+            statusDisplay.classList.add('text-gray-600');
+
+            const canvas = document.createElement('canvas');
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+            const imageData = canvas.toDataURL('image/jpeg', 0.9); // Use JPEG for smaller file size
+
+            let latitude = null;
+            let longitude = null;
+
+            // Get Geolocation
+            if (navigator.geolocation) {
+                try {
+                    const position = await new Promise((resolve, reject) => {
+                        navigator.geolocation.getCurrentPosition(resolve, reject, {
+                            enableHighAccuracy: true,
+                            timeout: 5000, // Shorter timeout for capture
+                            maximumAge: 0
+                        });
+                    });
+                    latitude = position.coords.latitude.toFixed(2);
+                    longitude = position.coords.longitude.toFixed(2);
+                    statusDisplay.innerText = `Photo captured. Lat: ${latitude}, Lon: ${longitude}.`;
+                } catch (error) {
+                    let message = 'Unable to get location for this photo.';
+                    if (error.code === error.PERMISSION_DENIED) {
+                        message = 'Location access denied. Photo saved without coordinates.';
+                    } else if (error.code === error.TIMEOUT) {
+                        message = 'Getting location timed out. Photo saved without coordinates.';
+                    }
+                    statusDisplay.innerText = `Photo captured. ${message}`;
+                    statusDisplay.classList.add('text-orange-500');
+                }
+            } else {
+                statusDisplay.innerText = "Photo captured. Geolocation not supported. Saved without coordinates.";
+                statusDisplay.classList.add('text-orange-500');
+            }
+
+            // Save image and coordinates to local storage
+            const images = getCapturedImages();
+            images.push({ imageData, latitude, longitude });
+            saveCapturedImages(images);
+            loadGallery(); // Refresh gallery display
+            captureButton.disabled = false; // Re-enable capture button
+        };
+
+        // --- Upload All Saved Images ---
+        uploadAllButton.onclick = async () => {
+            const imagesToUpload = getCapturedImages();
+            if (imagesToUpload.length === 0) {
+                statusDisplay.innerText = "No photos to upload.";
+                statusDisplay.classList.add('text-orange-500');
+                return;
+            }
+
+            uploadAllButton.disabled = true;
+            clearSavedButton.disabled = true;
+            captureButton.disabled = true;
+            statusDisplay.innerText = `Uploading ${imagesToUpload.length} photo(s)...`;
+            statusDisplay.classList.remove('text-red-600', 'text-green-600', 'text-orange-500');
+            statusDisplay.classList.add('text-gray-600');
+
+            let successfulUploads = 0;
+            let failedUploads = 0;
+            const uploadedImageIndices = new Set(); // To track which images were successfully uploaded
+
+            for (let i = 0; i < imagesToUpload.length; i++) {
+                const imgObj = imagesToUpload[i];
+                const base64Data = imgObj.imageData.split(',')[1];
+                const originalFileName = `photo_${Date.now()}_${i}`; // Generate a unique base name
+                const fileExtension = '.jpeg'; // Since we're using image/jpeg
+
+                let newFileName = originalFileName;
+                if (imgObj.latitude !== null && imgObj.longitude !== null) {
+                    const cleanLat = String(imgObj.latitude).replace(/[^0-9.-]/g, '');
+                    const cleanLon = String(imgObj.longitude).replace(/[^0-9.-]/g, '');
+                    newFileName += `_Lat${cleanLat}_Lon${cleanLon}`;
+                }
+                newFileName += fileExtension;
+
+                try {
+                    statusDisplay.innerText = `Uploading photo ${i + 1}/${imagesToUpload.length}: '${newFileName}'...`;
+                    const response = await fetch(GOOGLE_APPS_SCRIPT_URL, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                        body: new URLSearchParams({
+                            image: base64Data,
+                            mimetype: 'image/jpeg', // Consistent MIME type
+                            filename: newFileName
+                        })
+                    });
+
+                    const result = await response.json();
+                    if (result.status === "success") {
+                        successfulUploads++;
+                        uploadedImageIndices.add(i); // Mark as uploaded
+                        console.log(`Uploaded: ${newFileName}, URL: ${result.url}`);
+                    } else {
+                        failedUploads++;
+                        console.error(`Failed to upload ${newFileName}: ${result.message || 'Unknown error'}`);
+                    }
+                } catch (error) {
+                    failedUploads++;
+                    console.error(`Network error uploading ${newFileName}: ${error.message}`);
+                }
+            }
+
+            // After attempting all uploads, update local storage
+            const remainingImages = imagesToUpload.filter((_, index) => !uploadedImageIndices.has(index));
+            saveCapturedImages(remainingImages);
+            loadGallery(); // Refresh gallery to show only remaining images
+
+            if (successfulUploads > 0 && failedUploads === 0) {
+                statusDisplay.innerText = `All ${successfulUploads} photos uploaded successfully!`;
+                statusDisplay.classList.add('text-green-600');
+            } else if (successfulUploads > 0 && failedUploads > 0) {
+                statusDisplay.innerText = `${successfulUploads} photos uploaded, ${failedUploads} failed.`;
+                statusDisplay.classList.add('text-orange-500');
+            } else {
+                statusDisplay.innerText = `All ${failedUploads} uploads failed.`;
+                statusDisplay.classList.add('text-red-600');
+            }
+
+            uploadAllButton.disabled = false;
+            clearSavedButton.disabled = false;
+            // Only re-enable capture if camera was initialized successfully
+            if (video.srcObject) {
+                captureButton.disabled = false;
+            }
+        };
+
+        // --- Clear All Saved Images ---
+        clearSavedButton.onclick = () => {
+            if (confirm("Are you sure you want to clear all saved photos? This cannot be undone.")) {
+                localStorage.removeItem('capturedImages');
+                loadGallery();
+                statusDisplay.innerText = "All saved photos cleared.";
+                statusDisplay.classList.add('text-orange-500');
+            }
+        };
+
+        // --- Initial Load ---
+        document.addEventListener('DOMContentLoaded', () => {
+            captureButton.disabled = true; // Disable until camera is ready
+            uploadAllButton.disabled = true; // Disable until photos are present
+            clearSavedButton.disabled = true; // Disable until photos are present
+            initCamera();
+            loadGallery(); // Load any previously saved images
+        });
+    </script>
+</body>
+</html>
